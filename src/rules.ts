@@ -43,7 +43,10 @@ try {
 export const other = {
   codeRemoveIndent: /^(?: {0,3}\t| {1,4})/gm,
   listInterruptsParagraph: /^ {0,3}(?:[*+-]|1[.)])[ \t]+[^ \t\n]/,
-  outputLinkReplace: /\\([\[\]])/g,
+  // Matches whole code spans and lone backtick runs first, so that only escaped brackets outside code spans are unescaped.
+  outputLinkReplace: /(`+)(?:[^`]|[^`][\s\S]*?[^`])\1(?!`)|`+|\\([\[\]])|\\[\s\S]/g,
+  // pedantic keeps the original behaviour: unescape everywhere, code spans included
+  outputLinkReplacePedantic: /\\([\[\]])/g,
   indentCodeCompensation: /^(\s+)(?:```)/,
   beginningSpace: /^\s+/,
   endingHash: /#$/,
@@ -484,11 +487,24 @@ const _inlineLabel = edit(/(?:\[(?:brackets|\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|`+(?
   .replace('brackets', _inlineLabelBrackets)
   .getRegex();
 
+const _linkHref = /<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]+|(?=\))/;
+// Same as the definition title: the escaped character is not the closer.
+const _linkTitle = /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\((?:\\[\s\S]|[^)\\])*\)/;
+
 const link = edit(/^!?\[(label)\]\([ \t\n]*(href)(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)(title))?[ \t\n]*\)/)
   .replace('label', _inlineLabel)
-  .replace('href', /<(?:\\.|[^\n<>\\])+>|[^ \t\n\x00-\x1f]+|(?=\))/)
-  // Same as the definition title: the escaped character is not the closer.
-  .replace('title', /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\((?:\\[\s\S]|[^)\\])*\)/)
+  .replace('href', _linkHref)
+  .replace('title', _linkTitle)
+  .getRegex();
+
+// The part of a link after its label, used to re-match once the label end is known.
+const linkTail = edit(/^\]\([ \t\n]*(href)(?:(?:[ \t]+(?:\n[ \t]*)?|\n[ \t]*)(title))?[ \t\n]*\)/)
+  .replace('href', _linkHref)
+  .replace('title', _linkTitle)
+  .getRegex();
+
+const reflinkTail = edit(/^\]\[(ref)\]/)
+  .replace('ref', _blockLabel)
   .getRegex();
 
 const reflink = edit(/^!?\[(label)\]\[(ref)\]/)
@@ -557,6 +573,8 @@ const inlineNormal = {
   nolink,
   punctuation,
   reflink,
+  reflinkTail,
+  linkTail,
   reflinkSearch,
   tag,
   text: inlineText,

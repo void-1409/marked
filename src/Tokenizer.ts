@@ -15,10 +15,42 @@ import type { _Lexer } from './Lexer.ts';
 import type { Links, Tokens, Token } from './Tokens.ts';
 import type { MarkedOptions } from './MarkedOptions.ts';
 
+// replacer for `outputLinkReplace`: keeps everything but an escaped bracket as is
+const unescapeBracket = (match: string, _ticks: string | undefined, bracket: string | undefined): string => bracket ?? match;
+
+/**
+ * Find the `]` that closes a link label starting at `labelStart`, skipping
+ * escapes and whole code spans. Returns -1 when there is none.
+ */
+function findLinkLabelEnd(src: string, labelStart: number, rules: Rules): number {
+  let depth = 0;
+  for (let i = labelStart; i < src.length; i++) {
+    const c = src.charCodeAt(i);
+    if (c === 92) { // \
+      i++;
+    } else if (c === 96) { // `
+      const span = rules.inline.code.exec(src.slice(i));
+      if (span) {
+        i += span[0].length - 1;
+      } else {
+        while (src.charCodeAt(i + 1) === 96) i++;
+      }
+    } else if (c === 91) { // [
+      depth++;
+    } else if (c === 93) { // ]
+      if (depth === 0) return i;
+      depth--;
+    }
+  }
+  return -1;
+}
+
 function outputLink(cap: string[], link: Pick<Tokens.Link, 'href' | 'title'>, raw: string, lexer: _Lexer, rules: Rules): Tokens.Link | Tokens.Image | undefined {
   const href = link.href;
   const title = link.title || null;
-  const text = cap[1].replace(rules.other.outputLinkReplace, '$1');
+  const text = lexer.options.pedantic
+    ? cap[1].replace(rules.other.outputLinkReplacePedantic, '$1')
+    : cap[1].replace(rules.other.outputLinkReplace, unescapeBracket);
   const isImage = cap[0].charAt(0) === '!';
 
   const outerInLink = lexer.state.inLink;
@@ -809,9 +841,23 @@ export class _Tokenizer<ParserOutput = string, RendererOutput = string> {
     if (this.lexer.state.linkParenPossible === false) {
       return undefined;
     }
-    const cap = this.rules.inline.link.exec(src);
+    let cap: RegExpExecArray | string[] | null = this.rules.inline.link.exec(src);
     if (cap) {
       const labelStart = cap[0].charAt(0) === '!' ? 2 : 1;
+      if (!this.options.pedantic && cap[1].includes('`')) {
+        // the label regex can pair backtick runs of different lengths, so find the real end
+        const labelEnd = findLinkLabelEnd(src, labelStart, this.rules);
+        if (labelEnd !== labelStart + cap[1].length) {
+          if (labelEnd === -1) {
+            return;
+          }
+          const tail = this.rules.inline.linkTail.exec(src.slice(labelEnd));
+          if (!tail) {
+            return;
+          }
+          cap = [src.slice(0, labelEnd) + tail[0], src.slice(labelStart, labelEnd), tail[1], tail[2]];
+        }
+      }
       if (!this.options.pedantic && isLabelEndInsideToken(src, cap[1], labelStart, this.rules)) {
         return;
       }
@@ -881,9 +927,16 @@ export class _Tokenizer<ParserOutput = string, RendererOutput = string> {
   }
 
   reflink(src: string, links: Links): Tokens.Link | Tokens.Image | Tokens.Text | undefined {
-    let cap;
-    if ((cap = this.rules.inline.reflink.exec(src))
-      || (cap = this.rules.inline.nolink.exec(src))) {
+    let cap: RegExpExecArray | string[] | null = this.rules.inline.reflink.exec(src);
+    if (cap && !this.options.pedantic && cap[1].includes('`')) {
+      const start = cap[0].charAt(0) === '!' ? 2 : 1;
+      const labelEnd = findLinkLabelEnd(src, start, this.rules);
+      if (labelEnd !== start + cap[1].length) {
+        const tail = labelEnd === -1 ? null : this.rules.inline.reflinkTail.exec(src.slice(labelEnd));
+        cap = tail ? [src.slice(0, labelEnd) + tail[0], src.slice(start, labelEnd), tail[1]] : null;
+      }
+    }
+    if (cap || (cap = this.rules.inline.nolink.exec(src))) {
       const labelStart = cap[0].charAt(0) === '!' ? 2 : 1;
       if (!this.options.pedantic && isLabelEndInsideToken(src, cap[1], labelStart, this.rules)) {
         return;
