@@ -71,6 +71,14 @@ describe('marked unit', () => {
     });
   });
 
+  describe('link text with escaped brackets', () => {
+    // AC-9
+    it('should unescape brackets outside code spans and keep them inside', () => {
+      assert.strictEqual(lexer('[a\\]b](u)')[0].tokens[0].text, 'a]b');
+      assert.strictEqual(lexer('[`\\]`](u)')[0].tokens[0].text, '`\\]`');
+    });
+  });
+
   describe('use extension', () => {
     it('should use custom block tokenizer + renderer extensions', () => {
       const underline = {
